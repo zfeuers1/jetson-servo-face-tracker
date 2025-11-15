@@ -11,7 +11,7 @@ import time
 from typing import Tuple, Optional
 from collections import deque
 from camera_utils import gstreamer_pipeline
-from servo_controller_v2 import ServoController
+from servo_controller import ServoController
 
 # MediaPipe face detection
 mp_face_detection = mp.solutions.face_detection
