@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.jpg
+*.png
+*.mp4
+*.avi
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
