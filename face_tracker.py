@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """
-Face Tracker - High-performance smooth tracking
-Uses PD control with prediction and adaptive dead zone
-Takes full advantage of Jetson Orin's capabilities
+Face Tracker - Real-time face tracking with Teensy servo control
+Uses proportional control with velocity limiting and search patterns
 """
 
 import cv2
 import mediapipe as mp
 import time
-from typing import Tuple, Optional
-from collections import deque
+from typing import Tuple
 from camera_utils import gstreamer_pipeline
 from servo_controller import ServoController
 
@@ -66,7 +64,7 @@ class ExponentialSmoother:
     """Exponential moving average for position smoothing"""
     
     def __init__(self, alpha: float):
-        self.alpha = alpha  # Smoothing factor (0-1)
+        self.alpha = alpha
         self.value = None
     
     def update(self, new_value: float) -> float:
@@ -81,8 +79,25 @@ class ExponentialSmoother:
         self.value = None
 
 
+def update_servo_axis(error, accumulated, current_angle, min_angle, max_angle):
+    """
+    Update a single servo axis (pan or tilt) with proportional control
+    Returns: (new_angle, new_accumulated, command_sent)
+    """
+    move = -error * GAIN
+    move = clamp(move, -MAX_MOVE_PER_UPDATE, MAX_MOVE_PER_UPDATE)
+    accumulated += move
+    
+    # Send command if accumulated error exceeds minimum
+    if abs(accumulated) >= MIN_MOVE:
+        new_angle = clamp(current_angle + accumulated, min_angle, max_angle)
+        return new_angle, 0.0, True
+    
+    return current_angle, accumulated, False
+
+
 def main():
-    """Main face tracker with PD control"""
+    """Main face tracking loop"""
     
     print("=" * 60)
     print("Face Tracker - FAST MODE")
@@ -201,47 +216,31 @@ def main():
                 
                 # Check if it's time to update servos
                 if current_time - last_servo_update >= servo_update_interval:
-                    # Check if we're "close enough" (inside dead zone)
                     in_deadzone_x = abs(error_x) <= DEAD_ZONE
                     in_deadzone_y = abs(error_y) <= DEAD_ZONE
                     
-                    # COMPLETE STOP if both X and Y are inside dead zone
+                    # LOCKED if both axes in dead zone
                     if in_deadzone_x and in_deadzone_y:
-                        # LOCKED - do absolutely nothing!
                         accumulated_pan = 0.0
                         accumulated_tilt = 0.0
                     else:
-                        # Outside dead zone - need to track
-                        
-                        # PAN: only adjust if outside dead zone
+                        # Update pan if outside dead zone
                         if not in_deadzone_x:
-                            move_pan = -error_x * GAIN
-                            # Clamp movement to prevent huge jumps
-                            move_pan = clamp(move_pan, -MAX_MOVE_PER_UPDATE, MAX_MOVE_PER_UPDATE)
-                            accumulated_pan += move_pan
-                            
-                            # Only send command if accumulated error exceeds servo dead band
-                            if abs(accumulated_pan) >= MIN_MOVE:
-                                pan_angle += accumulated_pan
-                                pan_angle = clamp(pan_angle, PAN_MIN, PAN_MAX)
+                            pan_angle, accumulated_pan, send_pan = update_servo_axis(
+                                error_x, accumulated_pan, pan_angle, PAN_MIN, PAN_MAX
+                            )
+                            if send_pan:
                                 servos.pan(int(pan_angle))
-                                accumulated_pan = 0.0
                         else:
                             accumulated_pan = 0.0
                         
-                        # TILT: only adjust if outside dead zone
+                        # Update tilt if outside dead zone
                         if not in_deadzone_y:
-                            move_tilt = -error_y * GAIN
-                            # Clamp movement to prevent huge jumps
-                            move_tilt = clamp(move_tilt, -MAX_MOVE_PER_UPDATE, MAX_MOVE_PER_UPDATE)
-                            accumulated_tilt += move_tilt
-                            
-                            # Only send command if accumulated error exceeds servo dead band
-                            if abs(accumulated_tilt) >= MIN_MOVE:
-                                tilt_angle += accumulated_tilt
-                                tilt_angle = clamp(tilt_angle, TILT_MIN, TILT_MAX)
+                            tilt_angle, accumulated_tilt, send_tilt = update_servo_axis(
+                                error_y, accumulated_tilt, tilt_angle, TILT_MIN, TILT_MAX
+                            )
+                            if send_tilt:
                                 servos.tilt(int(tilt_angle))
-                                accumulated_tilt = 0.0
                         else:
                             accumulated_tilt = 0.0
                     
@@ -258,13 +257,10 @@ def main():
                             (center_x + DEAD_ZONE, center_y + DEAD_ZONE),
                             (100, 100, 255), 2)
                 
-                # Status
-                if abs(error_x) <= DEAD_ZONE and abs(error_y) <= DEAD_ZONE:
-                    status = "LOCKED ✓"
-                    status_color = (0, 255, 0)
-                else:
-                    status = "TRACKING"
-                    status_color = (0, 200, 255)
+                # Status display
+                locked = abs(error_x) <= DEAD_ZONE and abs(error_y) <= DEAD_ZONE
+                status = "LOCKED ✓" if locked else "TRACKING"
+                status_color = (0, 255, 0) if locked else (0, 200, 255)
             
             # SEARCH MODE
             elif current_time - last_face_time > SEARCH_DELAY:

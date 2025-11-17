@@ -1,21 +1,15 @@
 /*
  * Teensy 4.1 Servo Controller for Face Tracker
  * 
- * Receives angle commands via USB Serial and outputs PWM to servos
- * Protocol: Simple binary format for speed
- * 
- * Hardware:
- * - Teensy 4.1
- * - 2x Servos (pan & tilt)
- * - Shared GND between Teensy, servos, and Jetson
- * - Servos powered externally (7.4V)
+ * Binary Protocol (115200 baud):
+ * - 'P' + angle byte (0-180) = Pan servo
+ * - 'T' + angle byte (0-180) = Tilt servo
  * 
  * Wiring:
- * - Pin 0 (PWM) → Pan Servo Signal (orange/white wire)
- * - Pin 1 (PWM) → Tilt Servo Signal (orange/white wire)
- * - Teensy GND → Servo GND (brown/black wire) → Power Supply GND
- * - Servo VCC (red wire) → 7.4V Power Supply
- * - Teensy USB → Jetson USB
+ * - Pin 0 → Pan servo signal
+ * - Pin 1 → Tilt servo signal
+ * - GND → Servo GND + Power supply GND
+ * - Servos powered from external 5-6V supply (NOT Teensy!)
  */
 
 #include <Servo.h>
@@ -70,13 +64,9 @@ void loop() {
     // Execute command
     if (cmd == 'P') {
       panServo.write(angle);
-      Serial.print("P");
-      Serial.println(angle);
     } 
     else if (cmd == 'T') {
       tiltServo.write(angle);
-      Serial.print("T");
-      Serial.println(angle);
     }
     else {
       // Invalid command, flush buffer
