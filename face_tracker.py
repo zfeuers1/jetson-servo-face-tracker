@@ -16,14 +16,13 @@ from servo_controller import ServoController
 # MediaPipe face detection
 mp_face_detection = mp.solutions.face_detection
 
-# Tracking parameters - ADAPTIVE GAIN!
-DEAD_ZONE = 40       # Pixels - tight precision
+# Tracking parameters - BALANCED
+DEAD_ZONE = 40       # Pixels - tight but stable
 MIN_MOVE = 1           # Degrees - fine adjustments
-GAIN_FAR = 0.008      # Gentle when far away (prevents overshoot)
-GAIN_NEAR = 0.013     # Fast when close (tight tracking)
-GAIN_THRESHOLD = 150  # Pixels - switch from gentle to fast
+GAIN = 0.011           # Balanced gain
 UPDATE_RATE = 30       # Hz - full speed
-SMOOTHING = 0.75       # Balance speed and smoothness
+SMOOTHING = 0.4        # Some smoothing for stability
+MAX_MOVE_PER_UPDATE = 18  # Cap big jumps
 
 # Servo limits
 PAN_MIN = 10
@@ -37,6 +36,7 @@ SEARCH_PAN_MIN = 40
 SEARCH_PAN_MAX = 140
 SEARCH_TILT_POSITIONS = [40, 50, 60]
 SEARCH_STEP = 10
+SEARCH_UPDATE_RATE = 5  # Hz - much slower than tracking (5 moves/sec)
 
 
 def clamp(value, min_val, max_val):
@@ -85,7 +85,7 @@ def main():
     """Main face tracker with PD control"""
     
     print("=" * 60)
-    print("Face Tracker - ADAPTIVE MODE")
+    print("Face Tracker - FAST MODE")
     print("=" * 60)
     print()
     print("Controls:")
@@ -94,7 +94,7 @@ def main():
     print("Features:")
     print(f"  • 60fps camera")
     print(f"  • {UPDATE_RATE}Hz servo updates")
-    print(f"  • Adaptive gain: gentle when far, fast when close")
+    print(f"  • Max {MAX_MOVE_PER_UPDATE}° per update (no overshoot)")
     print(f"  • Dead zone: {DEAD_ZONE}px")
     print()
     
@@ -149,7 +149,9 @@ def main():
     
     # Timing
     servo_update_interval = 1.0 / UPDATE_RATE
+    search_update_interval = 1.0 / SEARCH_UPDATE_RATE
     last_servo_update = time.time()
+    last_search_update = time.time()
     last_face_time = time.time()
     
     # Error accumulation to handle sub-threshold corrections
@@ -197,10 +199,6 @@ def main():
                 error_x = face_x - center_x
                 error_y = face_y - center_y
                 
-                # ADAPTIVE GAIN: use gentle gain when far, fast gain when close
-                error_distance = (error_x**2 + error_y**2) ** 0.5
-                current_gain = GAIN_FAR if error_distance > GAIN_THRESHOLD else GAIN_NEAR
-                
                 # Check if it's time to update servos
                 if current_time - last_servo_update >= servo_update_interval:
                     # Check if we're "close enough" (inside dead zone)
@@ -217,7 +215,9 @@ def main():
                         
                         # PAN: only adjust if outside dead zone
                         if not in_deadzone_x:
-                            move_pan = -error_x * current_gain
+                            move_pan = -error_x * GAIN
+                            # Clamp movement to prevent huge jumps
+                            move_pan = clamp(move_pan, -MAX_MOVE_PER_UPDATE, MAX_MOVE_PER_UPDATE)
                             accumulated_pan += move_pan
                             
                             # Only send command if accumulated error exceeds servo dead band
@@ -231,7 +231,9 @@ def main():
                         
                         # TILT: only adjust if outside dead zone
                         if not in_deadzone_y:
-                            move_tilt = -error_y * current_gain
+                            move_tilt = -error_y * GAIN
+                            # Clamp movement to prevent huge jumps
+                            move_tilt = clamp(move_tilt, -MAX_MOVE_PER_UPDATE, MAX_MOVE_PER_UPDATE)
                             accumulated_tilt += move_tilt
                             
                             # Only send command if accumulated error exceeds servo dead band
@@ -261,8 +263,7 @@ def main():
                     status = "LOCKED ✓"
                     status_color = (0, 255, 0)
                 else:
-                    mode = "GENTLE" if error_distance > GAIN_THRESHOLD else "FAST"
-                    status = f"TRACKING ({mode})"
+                    status = "TRACKING"
                     status_color = (0, 200, 255)
             
             # SEARCH MODE
@@ -273,7 +274,7 @@ def main():
                     face_x_smoother.reset()
                     face_y_smoother.reset()
                 
-                if current_time - last_servo_update >= servo_update_interval:
+                if current_time - last_search_update >= search_update_interval:
                     pan_angle += SEARCH_STEP * search_direction
                     
                     if pan_angle >= SEARCH_PAN_MAX:
@@ -286,7 +287,7 @@ def main():
                         search_direction = 1
                     
                     servos.move(int(pan_angle), int(tilt_angle))
-                    last_servo_update = current_time
+                    last_search_update = current_time
                 
                 status = "SEARCHING..."
                 status_color = (255, 165, 0)
@@ -307,12 +308,12 @@ def main():
             cv2.putText(frame, servo_text, (10, height - 60),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             
-            info_text = f"Adaptive Control | {UPDATE_RATE}Hz | Dead zone: {DEAD_ZONE}px | Gain: {GAIN_FAR}/{GAIN_NEAR}"
+            info_text = f"Fast Tracking | {UPDATE_RATE}Hz | Dead zone: {DEAD_ZONE}px | Max move: {MAX_MOVE_PER_UPDATE}°"
             cv2.putText(frame, info_text, (10, height - 20),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (180, 180, 180), 1)
             
             # Show frame
-            cv2.imshow("Face Tracker - Adaptive Mode", frame)
+            cv2.imshow("Face Tracker - Fast Mode", frame)
             
             # Check for ESC
             if cv2.waitKey(1) & 0xFF == 27:
