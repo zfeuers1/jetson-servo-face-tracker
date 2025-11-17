@@ -36,6 +36,49 @@ SEARCH_TILT_POSITIONS = [40, 50, 60]
 SEARCH_STEP = 10
 SEARCH_UPDATE_RATE = 5  # Hz - much slower than tracking (5 moves/sec)
 
+# Display colors (BGR format)
+COLOR_LOCKED = (0, 255, 0)      # Green
+COLOR_TRACKING = (0, 200, 255)  # Yellow
+COLOR_SEARCHING = (255, 165, 0) # Orange
+COLOR_WAITING = (150, 150, 150) # Gray
+COLOR_FACE_BOX = (0, 255, 0)    # Green
+COLOR_FACE_CENTER = (0, 255, 0) # Green
+COLOR_ERROR_LINE = (0, 255, 255) # Yellow
+COLOR_DEADZONE = (100, 100, 255) # Purple
+COLOR_CROSSHAIR = (255, 0, 0)   # Blue
+COLOR_TEXT = (255, 255, 255)    # White
+COLOR_INFO = (180, 180, 180)    # Light gray
+
+# Display sizes
+CROSSHAIR_SIZE = 30
+FACE_BOX_THICKNESS = 3
+FACE_CENTER_RADIUS = 10
+DEADZONE_THICKNESS = 2
+CROSSHAIR_THICKNESS = 3
+STATUS_FONT_SCALE = 1.5
+STATUS_THICKNESS = 3
+SERVO_FONT_SCALE = 0.7
+SERVO_THICKNESS = 2
+INFO_FONT_SCALE = 0.6
+INFO_THICKNESS = 1
+TEXT_MARGIN = 10
+SERVO_TEXT_OFFSET = 60
+INFO_TEXT_OFFSET = 20
+
+# Window settings
+WINDOW_TITLE = "Face Tracker"
+
+# Camera settings
+CAMERA_WIDTH = 1920
+CAMERA_HEIGHT = 1080
+CAMERA_FPS = 60
+
+# Initial servo positions
+SERVO_PAN_START = 90
+SERVO_TILT_START = 45
+SERVO_PAN_CENTER = 90
+SERVO_TILT_CENTER = 95
+
 
 def clamp(value, min_val, max_val):
     """Clamp value between min and max"""
@@ -88,12 +131,58 @@ def update_servo_axis(error, accumulated, current_angle, min_angle, max_angle):
     move = clamp(move, -MAX_MOVE_PER_UPDATE, MAX_MOVE_PER_UPDATE)
     accumulated += move
     
-    # Send command if accumulated error exceeds minimum
     if abs(accumulated) >= MIN_MOVE:
         new_angle = clamp(current_angle + accumulated, min_angle, max_angle)
         return new_angle, 0.0, True
     
     return current_angle, accumulated, False
+
+
+def draw_overlay(frame, pan_angle, tilt_angle, status, status_color):
+    """Draw basic overlay (crosshair, status, servo info)"""
+    height, width = frame.shape[:2]
+    center_x, center_y = width // 2, height // 2
+    
+    # Center crosshair
+    cv2.line(frame, (center_x - CROSSHAIR_SIZE, center_y), (center_x + CROSSHAIR_SIZE, center_y), 
+             COLOR_CROSSHAIR, CROSSHAIR_THICKNESS)
+    cv2.line(frame, (center_x, center_y - CROSSHAIR_SIZE), (center_x, center_y + CROSSHAIR_SIZE), 
+             COLOR_CROSSHAIR, CROSSHAIR_THICKNESS)
+    
+    # Status text
+    cv2.putText(frame, status, (TEXT_MARGIN, 50), cv2.FONT_HERSHEY_SIMPLEX, 
+                STATUS_FONT_SCALE, status_color, STATUS_THICKNESS)
+    
+    # Servo angles
+    servo_text = f"Pan:{pan_angle:.1f}deg  Tilt:{tilt_angle:.1f}deg"
+    cv2.putText(frame, servo_text, (TEXT_MARGIN, height - SERVO_TEXT_OFFSET), 
+                cv2.FONT_HERSHEY_SIMPLEX, SERVO_FONT_SCALE, COLOR_TEXT, SERVO_THICKNESS)
+    
+    # Info line
+    info_text = f"Tracking | {UPDATE_RATE}Hz | Dead zone: {DEAD_ZONE}px | Max: {MAX_MOVE_PER_UPDATE}deg"
+    cv2.putText(frame, info_text, (TEXT_MARGIN, height - INFO_TEXT_OFFSET), 
+                cv2.FONT_HERSHEY_SIMPLEX, INFO_FONT_SCALE, COLOR_INFO, INFO_THICKNESS)
+
+
+def draw_tracking_overlay(frame, face_x, face_y, x1, y1, x2, y2, error_x, error_y, 
+                          pan_angle, tilt_angle, status, status_color):
+    """Draw tracking visualization with face detection overlay"""
+    height, width = frame.shape[:2]
+    center_x, center_y = width // 2, height // 2
+    
+    # Face detection box and center
+    cv2.rectangle(frame, (x1, y1), (x2, y2), COLOR_FACE_BOX, FACE_BOX_THICKNESS)
+    cv2.circle(frame, (int(face_x), int(face_y)), FACE_CENTER_RADIUS, COLOR_FACE_CENTER, -1)
+    cv2.line(frame, (center_x, center_y), (int(face_x), int(face_y)), COLOR_ERROR_LINE, DEADZONE_THICKNESS)
+    
+    # Dead zone box
+    cv2.rectangle(frame,
+                  (center_x - DEAD_ZONE, center_y - DEAD_ZONE),
+                  (center_x + DEAD_ZONE, center_y + DEAD_ZONE),
+                  COLOR_DEADZONE, DEADZONE_THICKNESS)
+    
+    # Draw base overlay
+    draw_overlay(frame, pan_angle, tilt_angle, status, status_color)
 
 
 def main():
@@ -107,34 +196,34 @@ def main():
     print("  ESC - Exit")
     print()
     print("Features:")
-    print(f"  • 60fps camera")
+    print(f"  • {CAMERA_FPS}fps camera")
     print(f"  • {UPDATE_RATE}Hz servo updates")
-    print(f"  • Max {MAX_MOVE_PER_UPDATE}° per update (no overshoot)")
+    print(f"  • Max {MAX_MOVE_PER_UPDATE}deg per update")
     print(f"  • Dead zone: {DEAD_ZONE}px")
     print()
     
     # Initialize servos
     print("Initializing servos...")
     try:
-        servos = ServoController(pan_center=90, tilt_center=95)
+        servos = ServoController(pan_center=SERVO_PAN_CENTER, tilt_center=SERVO_TILT_CENTER)
     except Exception as e:
         print(f"✗ Failed to initialize servos: {e}")
         return
     
     # Start position
-    pan_angle = 90.0
-    tilt_angle = 45.0
+    pan_angle = float(SERVO_PAN_START)
+    tilt_angle = float(SERVO_TILT_START)
     servos.move(int(pan_angle), int(tilt_angle))
-    print(f"✓ Starting position: Pan={pan_angle:.0f}° Tilt={tilt_angle:.0f}°")
+    print(f"✓ Starting position: Pan={pan_angle:.0f}deg Tilt={tilt_angle:.0f}deg")
     
-    # Create GStreamer pipeline - 1080p @ 60fps
+    # Create GStreamer pipeline
     pipeline = gstreamer_pipeline(
         sensor_id=0,
-        capture_width=1920,
-        capture_height=1080,
-        display_width=1920,
-        display_height=1080,
-        framerate=60,
+        capture_width=CAMERA_WIDTH,
+        capture_height=CAMERA_HEIGHT,
+        display_width=CAMERA_WIDTH,
+        display_height=CAMERA_HEIGHT,
+        framerate=CAMERA_FPS,
         flip_method=0,
     )
     
@@ -147,7 +236,7 @@ def main():
         servos.close()
         return
     
-    print("✓ Camera opened at 1080p60")
+    print(f"✓ Camera opened at {CAMERA_WIDTH}x{CAMERA_HEIGHT}@{CAMERA_FPS}fps")
     print()
     print("Starting high-performance tracking...")
     print()
@@ -246,21 +335,14 @@ def main():
                     
                     last_servo_update = current_time
                 
-                # Visualization
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                cv2.circle(frame, (int(face_x), int(face_y)), 10, (0, 255, 0), -1)
-                cv2.line(frame, (center_x, center_y), (int(face_x), int(face_y)), (0, 255, 255), 2)
-                
-                # Draw dead zone
-                cv2.rectangle(frame,
-                            (center_x - DEAD_ZONE, center_y - DEAD_ZONE),
-                            (center_x + DEAD_ZONE, center_y + DEAD_ZONE),
-                            (100, 100, 255), 2)
-                
-                # Status display
+                # Determine status
                 locked = abs(error_x) <= DEAD_ZONE and abs(error_y) <= DEAD_ZONE
                 status = "LOCKED ✓" if locked else "TRACKING"
-                status_color = (0, 255, 0) if locked else (0, 200, 255)
+                status_color = COLOR_LOCKED if locked else COLOR_TRACKING
+                
+                # Draw tracking visualization
+                draw_tracking_overlay(frame, face_x, face_y, x1, y1, x2, y2, error_x, error_y,
+                                    pan_angle, tilt_angle, status, status_color)
             
             # SEARCH MODE
             elif current_time - last_face_time > SEARCH_DELAY:
@@ -285,31 +367,13 @@ def main():
                     servos.move(int(pan_angle), int(tilt_angle))
                     last_search_update = current_time
                 
-                status = "SEARCHING..."
-                status_color = (255, 165, 0)
+                draw_overlay(frame, pan_angle, tilt_angle, "SEARCHING...", COLOR_SEARCHING)
             
             else:
-                status = "WAITING..."
-                status_color = (150, 150, 150)
-            
-            # Draw center crosshair
-            cv2.line(frame, (center_x - 30, center_y), (center_x + 30, center_y), (255, 0, 0), 3)
-            cv2.line(frame, (center_x, center_y - 30), (center_x, center_y + 30), (255, 0, 0), 3)
-            
-            # Display info
-            cv2.putText(frame, status, (10, 50),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1.5, status_color, 3)
-            
-            servo_text = f"Pan:{pan_angle:.1f}°  Tilt:{tilt_angle:.1f}°"
-            cv2.putText(frame, servo_text, (10, height - 60),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            
-            info_text = f"Fast Tracking | {UPDATE_RATE}Hz | Dead zone: {DEAD_ZONE}px | Max move: {MAX_MOVE_PER_UPDATE}°"
-            cv2.putText(frame, info_text, (10, height - 20),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (180, 180, 180), 1)
+                draw_overlay(frame, pan_angle, tilt_angle, "WAITING...", COLOR_WAITING)
             
             # Show frame
-            cv2.imshow("Face Tracker - Fast Mode", frame)
+            cv2.imshow(WINDOW_TITLE, frame)
             
             # Check for ESC
             if cv2.waitKey(1) & 0xFF == 27:
